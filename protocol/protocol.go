@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -323,15 +324,75 @@ func (ch *ConnectionHandler) WritePacket(packet *Packet) status {
 }
 
 /*
-   LOGIN START
+	PING START
+*/
+
+type Ping struct {
+	Payload uint64
+	Data    []byte
+}
+
+func (p *Ping) Writer(w io.ByteWriter) {
+	for i := 0; i < len(p.Data); i++ {
+		w.WriteByte(p.Data[i])
+	}
+}
+
+func (p *Ping) packetLen() int {
+	// Procesar el numero payload
+
+	p.Data = append(p.Data, byte(p.Payload))
+
+	return len(p.Data)
+}
+
+func HeredatePing(c net.Conn) {
+	c.Write([]byte{0xFE, 0x01, 0xFA})
+}
+
+// END PING
+
+// ************************************************
+
+/*
+	NO PREMIUM LOGIN START
+*/
+
+type NPREMIUMLG struct {
+	Username string
+	Pwd      string
+	Data     []byte
+}
+
+func (np *NPREMIUMLG) Writer(w io.ByteWriter) {
+	for i := 0; i < len(np.Data); i++ {
+		w.WriteByte(np.Data[i])
+	}
+}
+
+func (np *NPREMIUMLG) packetLen() int {
+	np.Data = make([]byte, 0)
+	user_buf := EncodeString(np.Username)
+	pwd_buf := EncodeString(np.Pwd)
+
+	np.Data = append(np.Data, user_buf...)
+	np.Data = append(np.Data, pwd_buf...)
+	return len(np.Data)
+}
+
+// END LOGIN
+
+/*
+	LOGIN START
 */
 
 type LoginStart struct {
 	Name          string
 	HasPlayerUUID uint8
-	PlayerUUID    big.Int
+	PlayerUUID    string //big.Int = The real type is bit-128
 	Data          []byte
 }
+type xd big.Int
 
 func (ls *LoginStart) Writer(w io.ByteWriter) {
 	for i := 0; i < len(ls.Data); i++ {
@@ -352,10 +413,35 @@ func (ls *LoginStart) packetLen() int {
 	ls.Data = append(ls.Data, ls.HasPlayerUUID)
 
 	if ls.HasPlayerUUID == 0x01 {
-		ls.Data = append(ls.Data, ls.PlayerUUID.Bytes()...)
+		msb, lsb := EncodeUUID(ls.PlayerUUID)
+		msb_buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(msb_buf, msb)
+		lsb_buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(lsb_buf, lsb)
+		ls.Data = append(ls.Data, msb_buf...)
+		ls.Data = append(ls.Data, lsb_buf...)
+		//ls.Data = append(ls.Data, ls.PlayerUUID.Bytes()...)
 	}
 
 	return len(ls.Data)
+}
+
+func EncodeUUID(UUID string) (uint64, uint64) {
+	fmt.Println("************* EMPEZANDO EL ENCODE ******************")
+	bytes, _ := hex.DecodeString(UUID)
+
+	// Creando dos enteros sin firmar de 64 bits
+	msb := uint64(bytes[0])<<56 | uint64(bytes[1])<<48 | uint64(bytes[2])<<40 | uint64(bytes[3])<<32 | uint64(bytes[4])<<24 | uint64(bytes[5])<<16 | uint64(bytes[6])<<8 | uint64(bytes[7])
+	lsb := uint64(bytes[8])<<56 | uint64(bytes[9])<<48 | uint64(bytes[10])<<40 | uint64(bytes[11])<<32 | uint64(bytes[12])<<24 | uint64(bytes[13])<<16 | uint64(bytes[14])<<8 | uint64(bytes[15])
+
+	// Crear el entero sin signo de 128 bits
+	//var result big.Int
+	//result.Lsh(big.NewInt(0).SetUint64(msb), 64)
+	//result.Or(&result, big.NewInt(0).SetUint64(lsb))
+
+	fmt.Printf("Dataa: %x - %x", msb, lsb)
+	//return result.Bytes()
+	return msb, lsb
 }
 
 // END LOGIN
@@ -372,15 +458,66 @@ type RecPacketFormat struct {
 func (rpf *RecPacketFormat) HandlePacket(h Handler) {
 	// Decodificar paquete
 
+	// Get the length of the data and set how many leading bytes of the string to read (2 or 1) MAX_BYTES_LENGTH_FIELD = 2
+	var get_n_bytes uint8 = 1
+	get_tpayload_len := len(rpf.total_payload)
+
+	if get_tpayload_len > 127 {
+		get_n_bytes = 2
+	}
+
+	//packet_lenght := rpf.total_payload[get_n_bytes]
+	var packet_lenght []byte
+	var num int
+	if get_tpayload_len > 0 {
+		for i := 0; i < int(get_n_bytes); i++ {
+			packet_lenght = append(packet_lenght, rpf.total_payload[i])
+		}
+		num, _ = Undo(packet_lenght)
+	}
+
+	rpf.PacketLength = int64(num)
+	rpf.PacketID = rpf.total_payload[get_n_bytes]
+
+	if len(rpf.total_payload[get_n_bytes+1:]) > 0 {
+		rpf.Data = append(rpf.Data, rpf.total_payload[get_n_bytes+1:]...)
+	} else {
+		rpf.Data = append(rpf.Data, []byte{0x00, 0x00, 0x00}...)
+	}
+
 	// Al ultimo, para ejecutar el Handler con los datos decodificados y proporcionados al usuario
-	h(2, 23, rpf.Data)
+	h(rpf.PacketID, rpf.PacketLength, rpf.Data)
+}
+
+func Undo(data []byte) (int, error) {
+	value := 0
+	position := 0
+	counter := 0
+	var currentByte byte
+
+	for {
+		currentByte = data[counter]
+		value |= (int(currentByte) & segment_bits) << position
+
+		if (int(currentByte) & continue_bit) == 0 {
+			break
+		}
+
+		position += 7
+		counter += 1
+
+		if position >= 32 {
+			log.Fatal("VarInt es mas grande que 32bits")
+		}
+	}
+	return value, nil
 }
 
 type Raw_Packet interface {
 	HandlePacket(h Handler)
 }
 
-func (ch *ConnectionHandler) RecievePacket() (Raw_Packet, error) {
+func (ch *ConnectionHandler) ReceivePacket() (Raw_Packet, error) {
 	packet_recv := &RecPacketFormat{}
 	// Instanciar un reader
 	data := new(bytes.Buffer)
@@ -397,6 +534,8 @@ func (ch *ConnectionHandler) RecievePacket() (Raw_Packet, error) {
 	fmt.Printf("[ + ] Llego un mensaje de datos: %x de peso %d Bytes", data.Bytes(), n)
 
 	packet_recv.total_payload = append(packet_recv.total_payload, data.Bytes()...)
+
+	data.Reset()
 	return packet_recv, nil
 
 }
