@@ -4,16 +4,19 @@ Besides that, I plan to build a bot that can connect to different servers and ca
 
 -----
 # GOALS AND TODOS
-- Achieve a stable connection with servers (NOT PREMIUM) for the moment.
+- Achieve a stable connection with servers (NOT PREMIUM)/Cracked for the moment.
   
 - Find out about the different forms of authentication implemented by servers such as universocraft.
 
 - Improve efficiency when writing bytes to buffers.
 
+- Fix the Reconnect and resend packet responde log (NOT IS A PROBLEM, IS A LOG)
 ------
 
 
-# UPDATES
+# UPDATES (7/3/2023)
+- Reconnection in case of server disconnection.
+- Stable connection to the BongeeCord server.
 - Handling of packets received with the function: 
 ```go
 p, _ := connection.ReceivePacket()

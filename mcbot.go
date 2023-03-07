@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/liuxsys/mcbot/protocol"
 )
@@ -27,13 +28,18 @@ func main() {
 	fmt.Printf("%b\n", pos.GetData())
 
 	// Protocol LOGS
-
+	//var SIGNALER chan int
+	//SIGNALER = make(chan int, 0x01)
 	fmt.Println("****** PROTOCOL LOGS ******")
-	protoconn := protocol.NewConnecionAndBind("mc.universocraft.net", context.Background())
+	protoconn := protocol.NewConnecionAndBind("mc.universocraft.com", context.Background()) // mc.deluxezone.net top.mc-complex.com
+
+	// Auto handle Internals (compression set, Reset connections, 0 bytes data received)
+
+	go protoconn.Auto_handler_internals()
 
 	handshake := protocol.HandShake{
-		Proto_version:  protocol.NewVar[protocol.VARTYPE](758, protocol.VARINT),
-		Server_address: "mc.universocraft.net",
+		Proto_version:  protocol.NewVar[protocol.VARTYPE](759, protocol.VARINT),
+		Server_address: "mc.universocraft.com",
 		Next_state:     protocol.NewVar[protocol.VARTYPE](0x01, protocol.VARINT),
 	}
 
@@ -43,7 +49,7 @@ func main() {
 		PacketData:   &handshake,
 	}
 
-	protoconn.WritePacket(&packet)
+	protoconn.WritePacket(packet)
 	fmt.Println("Escribiendo el paquete de solicitud de estado...")
 
 	status_request := protocol.Packet{
@@ -52,19 +58,39 @@ func main() {
 		PacketData:   nil,
 	}
 
-	protoconn.WritePacket(&status_request)
+	protoconn.WritePacket(status_request)
 
 	p, _ := protoconn.ReceivePacket()
 
 	p.HandlePacket(func(pid uint8, packetLength int64, data []byte) {
-		fmt.Printf("\nPacketID: %d - PacketLength: %d - PacketData: %x\n", pid, packetLength, data)
+		fmt.Printf("\nPacketID: %d - PacketLength: %d - PacketData:\n", pid, packetLength)
 	})
 
+	time.Sleep(10 * time.Second)
+	// Ping Packet
+	/*ping_env := protocol.Ping{
+		Payload: 0x556,
+	}
+
+	ping_packet := protocol.Packet{
+		PacketID:     0x01,
+		PacketLenght: &protocol.VarInt{},
+		PacketData:   &ping_env,
+	}
+
+	protoconn.WritePacket(ping_packet)
+
+	ping, _ := protoconn.ReceivePacket()
+
+	ping.HandlePacket(func(pid uint8, packetLength int64, data []byte) {
+		fmt.Printf("\nPacketID: %d - PacketLength: %d - PacketData:\n", pid, packetLength)
+	})*/
+
 	// Iniciar sesion
-	/*fmt.Println("Logs de inicio de session")
+	fmt.Println("Logs de inicio de session")
 	handshake_login := protocol.HandShake{
-		Proto_version:  protocol.NewVar[protocol.VARTYPE](758, protocol.VARINT),
-		Server_address: "jugar.voxcraft.us",
+		Proto_version:  protocol.NewVar[protocol.VARTYPE](759, protocol.VARINT),
+		Server_address: "mc.universocraft.com",
 		Next_state:     protocol.NewVar[protocol.VARTYPE](0x02, protocol.VARINT),
 	}
 
@@ -74,7 +100,7 @@ func main() {
 		PacketData:   &handshake_login,
 	}
 
-	protoconn.WritePacket(&packet_login)*/
+	protoconn.WritePacket(packet_login)
 
 	/*login_start := protocol.NPREMIUMLG{
 		Username: "dollar",
@@ -90,8 +116,8 @@ func main() {
 	protoconn.WritePacket(&lhstart_packet)
 	protoconn.RecievePacket()*/
 
-	/*login_start := protocol.LoginStart{
-		Name:          "dollar",
+	login_start := protocol.LoginStart{
+		Name:          "yosoylad",
 		HasPlayerUUID: 0x00,
 		PlayerUUID:    "38b231576a2a40a7b78cd999dfbb3d50",
 	}
@@ -102,15 +128,20 @@ func main() {
 		PacketData:   &login_start,
 	}
 
-	protoconn.WritePacket(&loginstart_packet)
+	protoconn.WritePacket(loginstart_packet)
 
-	raw_packet, _ := protoconn.RecievePacket() // TODO: Errors in the Packet recieve
+	raw_packet, errRawP := protoconn.ReceivePacket() // TODO: Errors in the Packet recieve
+	if errRawP != nil {
+		fmt.Println("Ocurrio un error", errRawP)
+
+	}
 	raw_packet.HandlePacket(func(pid uint8, packetLength int64, data []byte) {
-
-	})*/
-
+		fmt.Printf("\nPacketID: %d - PacketLength: %d - PacketData:\n", pid, packetLength)
+	})
+	time.Sleep(10 * time.Second)
 	protoconn.Client.Close()
-	//<-finishListenMsg
+
+	//<-SIGNALER
 	fmt.Println("Programa completado")
 
 }

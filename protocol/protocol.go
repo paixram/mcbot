@@ -6,11 +6,26 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net"
+	"sync"
+)
+
+type SIGNAL int
+
+// SIGNALER ERRORS
+const (
+	CLOSE_CONNECTION               SIGNAL = 0x00
+	CLOSE_CONNECTION_AND_HANDSHAKE SIGNAL = CLOSE_CONNECTION | RESEND_HANDSHAKE
+)
+
+// SIGNALERS VARIANTS
+const (
+	RESEND_HANDSHAKE SIGNAL = 0x100
 )
 
 // Tipos del protocol
@@ -96,15 +111,12 @@ func NewVar[T VARTYPE](value int64, var_type T) varFuncs {
 
 	switch var_type {
 	case T(VARINT):
-		fmt.Println("Es de tipo VARTINT")
-
 		return &VarInt{
 			value: int(value),
 			data:  make([]byte, 0),
 		}
 
 	case T(VARLONG):
-		fmt.Println("Es de tipo VARLONG")
 
 		return &VarLong{
 			value: long(value),
@@ -213,14 +225,14 @@ func (hs *HandShake) Writer(w io.ByteWriter) {
 
 func (hs *HandShake) packetLen() int {
 	//payloadLen := uint32(len(hs.proto_version.data) + len(hs.server_address) + len(hs.next_state.data) + 3)
-	hs.Proto_version.Process()
-	hs.Next_state.Process()
 	fmt.Printf("Proto version: %x - Len of proto_version: %d", hs.Proto_version.GetDataArray(), len(hs.Proto_version.GetDataArray()))
 	//fmt.Printf("Nex state: %x - Len of next_state: %d", hs.Next_state.GetDataArray(), len(hs.Next_state.GetDataArray()))
-
 	if len(hs.Data) != 0 {
 		return len(hs.Data)
 	}
+
+	hs.Proto_version.Process()
+	hs.Next_state.Process()
 
 	// Convert PORT to int
 	port_buf := make([]byte, 2)
@@ -230,6 +242,7 @@ func (hs *HandShake) packetLen() int {
 	hs.Data = make([]byte, 0)
 
 	hs.Data = append(hs.Data, hs.Proto_version.GetDataArray()...)
+
 	//hs.Data = append(hs.Data, []byte(hs.Server_address)...)
 	// Process server addres before append into buffer
 	server_encode := EncodeString(hs.Server_address)
@@ -295,14 +308,62 @@ func (p *Packet) Writer(w io.ByteWriter) {
 }
 
 // Protocol specs
-type ConnectionHandler struct {
-	Client net.Conn
-	ctx    context.Context
+const (
+	PORT string = "25565"
+)
+
+var (
+	AUXILIARY chan Raw_Packet = make(chan Raw_Packet, 10)
+	PONG      chan int        = make(chan int, 100)
+)
+
+func NewConnecionAndBind(address string, contexto context.Context) *ConnectionHandler {
+
+	server := address + ":" + PORT
+	client, errNeti := net.Dial("tcp", server)
+
+	if errNeti != nil {
+		log.Fatal("[ + ] Ha ocurrido un error al conectar y bindear")
+		return nil
+	}
+
+	fmt.Printf("[ + ] Se ha establecido la conexion con: %s", address)
+	//client.SetReadDeadline(time.Now().Add(30 * time.Second))
+	return &ConnectionHandler{
+		Address:         server,
+		Client:          client,
+		ctx:             contexto,
+		SIGNALER:        make(chan SIGNAL, 100),
+		Previous_packet: Packet{},
+		mu:              sync.Mutex{},
+	}
 }
 
-func (ch *ConnectionHandler) WritePacket(packet *Packet) status {
+type ConnectionHandler struct {
+	Address         string
+	Client          net.Conn
+	ctx             context.Context
+	SIGNALER        chan SIGNAL
+	Current_packet  Packet
+	Previous_packet Packet
+	mu              sync.Mutex
+}
+
+func (ch *ConnectionHandler) WritePacket(packet Packet) status {
 	//number_bits_written, errWrite := ch.Client.Write(data)
 
+	fmt.Printf("\n[ + ] Broadcasting: %x", packet.PacketData)
+	void_packet := Packet{}
+	if ch.Current_packet == void_packet {
+		ch.Current_packet = packet
+		ch.Previous_packet = packet
+	} else /*if ch.Current_packet != void_packet*/ {
+		ch.Previous_packet = ch.Current_packet
+		ch.Current_packet = packet
+	}
+
+	//ch.Current_packet = packet
+	//fmt.Println("Ultimo enviaje: ", ch.Current_packet.PacketData, ch.Previous_packet.PacketData)
 	//buf := bytes.NewBuffer([]byte{})
 
 	buf := new(bytes.Buffer)
@@ -323,6 +384,112 @@ func (ch *ConnectionHandler) WritePacket(packet *Packet) status {
 
 }
 
+func (ch *ConnectionHandler) ReceivePacket() (Raw_Packet, error) {
+	ch.mu.Lock()
+	packet_recv := &RecPacketFormat{}
+	// Instanciar un reader
+	data := new(bytes.Buffer)
+	raw_data := bufio.NewWriter(data)
+
+	//n, err := ch.Client.Read()
+	n, err := io.Copy(raw_data, ch.Client)
+	if err != nil || n == 0 {
+		ch.mu.Unlock()
+		if ch.Previous_packet.PacketID == 0x00 {
+			fmt.Println("HAA!")
+			ch.SIGNALER <- CLOSE_CONNECTION_AND_HANDSHAKE
+
+		} else {
+			ch.SIGNALER <- CLOSE_CONNECTION
+		}
+
+		//log.Fatal("Se obtuvo un error al leer mensaje: ", err)
+		fmt.Println("[ - ] FATAL LOGGER: ", err, n)
+		// In error case, receive Auxiliary response
+		packet_recv := <-AUXILIARY
+		return packet_recv, errors.New("[ - ] Reconnect and resen packet response") // Retornar una nueva respuesta pero con el paquete reenviado
+	}
+
+	fmt.Printf("[ + ] Llego un mensaje de datos: %x de peso %d Bytes", data.Bytes(), n)
+
+	packet_recv.total_payload = append(packet_recv.total_payload, data.Bytes()...)
+	data.Reset()
+	ch.mu.Unlock()
+	return packet_recv, nil
+
+}
+
+/*
+func (ch *ConnectionHandler) network_scanner(status chan int) {
+	for {
+		// Get status of the network
+		buf := make([]byte, 1024)
+		ch.Client.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, try_read := ch.Client.Read(buf)
+		fmt.Printf("Datos llegados: %d - %x", n, buf)
+
+		if try_read != nil {
+			status <- 0x00
+			continue
+		}
+
+		status <- 0x01
+	}
+}*/
+
+func (ch *ConnectionHandler) reconnect() {
+	fmt.Println("[ + ] Reconnecting to the server...")
+	client, errNeti := net.Dial("tcp", ch.Address)
+	if errNeti != nil {
+		log.Fatal("[ - ] Reconnection not stablish: ", errNeti)
+	}
+	fmt.Println("[ + ] New Connection stablish")
+	ch.Client = client
+	PONG <- 0x00
+}
+
+func (ch *ConnectionHandler) resend() {
+	// Handshake case
+	//fmt.Println("Enviando los siguientes paquetes: ", ch.Previous_packet.PacketData, ch.Current_packet.PacketData)
+	handshake_send := ch.WritePacket(ch.Previous_packet)
+	status := ch.WritePacket(ch.Previous_packet)
+	if status == Error || handshake_send == Error {
+		fmt.Println("[ - ] Error in resend package")
+	}
+
+	// Get packet Data
+	pkt, _ := ch.ReceivePacket() // Aqui puede que este el error
+
+	AUXILIARY <- pkt
+
+}
+
+// Function that helps to handle packets and internal protocol errors, it is provided with a signal channel to indicate when it terminates or when it does not.
+func (ch *ConnectionHandler) Auto_handler_internals() {
+	// Start network status scanning
+	//go ch.network_scanner(socket_status)
+
+	for {
+		signal := <-ch.SIGNALER
+		fmt.Println("Entendido: ", signal)
+
+		switch signal {
+		case CLOSE_CONNECTION:
+			fmt.Println("[ - ] You have been disconnected from the server")
+			ch.reconnect()
+		case CLOSE_CONNECTION_AND_HANDSHAKE:
+			fmt.Println("[ - ] You have been disconnected from the server")
+			go ch.reconnect()
+			<-PONG
+			go ch.resend()
+		default:
+			fmt.Println("Connection is running")
+		}
+
+		signal = 0
+	}
+}
+
 /*
 	PING START
 */
@@ -341,7 +508,15 @@ func (p *Ping) Writer(w io.ByteWriter) {
 func (p *Ping) packetLen() int {
 	// Procesar el numero payload
 
-	p.Data = append(p.Data, byte(p.Payload))
+	if len(p.Data) > 0 {
+		return len(p.Data)
+	}
+
+	num := make([]byte, 8)
+
+	binary.BigEndian.PutUint64(num, p.Payload)
+	fmt.Printf("Payload hex: %x", num)
+	p.Data = append(p.Data, num...)
 
 	return len(p.Data)
 }
@@ -456,6 +631,12 @@ type RecPacketFormat struct {
 }
 
 func (rpf *RecPacketFormat) HandlePacket(h Handler) {
+
+	if len(rpf.total_payload) == 0 {
+		//log.Fatal("[ - ] No han llegado datos")
+		fmt.Println("[ - ] No Data Received")
+		return // Exit of the function
+	}
 	// Decodificar paquete
 
 	// Get the length of the data and set how many leading bytes of the string to read (2 or 1) MAX_BYTES_LENGTH_FIELD = 2
@@ -517,29 +698,6 @@ type Raw_Packet interface {
 	HandlePacket(h Handler)
 }
 
-func (ch *ConnectionHandler) ReceivePacket() (Raw_Packet, error) {
-	packet_recv := &RecPacketFormat{}
-	// Instanciar un reader
-	data := new(bytes.Buffer)
-	raw_data := bufio.NewWriter(data)
-
-	//n, err := ch.Client.Read()
-
-	n, err := io.Copy(raw_data, ch.Client)
-
-	if err != nil {
-		log.Fatal("Se obtuvo un error al leer mensaje: ", err)
-	}
-
-	fmt.Printf("[ + ] Llego un mensaje de datos: %x de peso %d Bytes", data.Bytes(), n)
-
-	packet_recv.total_payload = append(packet_recv.total_payload, data.Bytes()...)
-
-	data.Reset()
-	return packet_recv, nil
-
-}
-
 func EncodeString(value string) []byte {
 	value_length := len(value)
 
@@ -550,24 +708,4 @@ func EncodeString(value string) []byte {
 	data_string := append(value_length_varint.GetDataArray(), []byte(value)...)
 
 	return data_string
-}
-
-const (
-	PORT string = "25565"
-)
-
-func NewConnecionAndBind(address string, contexto context.Context) *ConnectionHandler {
-	client, errNeti := net.Dial("tcp", address+":"+PORT)
-
-	if errNeti != nil {
-		log.Fatal("[ + ] Ha ocurrido un error al conectar y bindear")
-		return nil
-	}
-
-	fmt.Printf("[ + ] Se ha establecido la conexion con: %s", address)
-
-	return &ConnectionHandler{
-		Client: client,
-		ctx:    contexto,
-	}
 }
