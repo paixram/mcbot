@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/big"
 	"net"
 	"sync"
 )
@@ -547,7 +546,6 @@ type LoginStart struct {
 	PlayerUUID    string //big.Int = The real type is bit-128
 	Data          []byte
 }
-type xd big.Int
 
 func (ls *LoginStart) Writer(w io.ByteWriter) {
 	for i := 0; i < len(ls.Data); i++ {
@@ -588,11 +586,6 @@ func EncodeUUID(UUID string) (uint64, uint64) {
 	// Creando dos enteros sin firmar de 64 bits
 	msb := uint64(bytes[0])<<56 | uint64(bytes[1])<<48 | uint64(bytes[2])<<40 | uint64(bytes[3])<<32 | uint64(bytes[4])<<24 | uint64(bytes[5])<<16 | uint64(bytes[6])<<8 | uint64(bytes[7])
 	lsb := uint64(bytes[8])<<56 | uint64(bytes[9])<<48 | uint64(bytes[10])<<40 | uint64(bytes[11])<<32 | uint64(bytes[12])<<24 | uint64(bytes[13])<<16 | uint64(bytes[14])<<8 | uint64(bytes[15])
-
-	// Crear el entero sin signo de 128 bits
-	//var result big.Int
-	//result.Lsh(big.NewInt(0).SetUint64(msb), 64)
-	//result.Or(&result, big.NewInt(0).SetUint64(lsb))
 
 	fmt.Printf("Dataa: %x - %x", msb, lsb)
 	//return result.Bytes()

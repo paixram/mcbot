@@ -26,6 +26,7 @@ p.HandlePacket(func(pid uint8, packetLength int64, data []byte) {
     /// Handle Packet...
 }
 ```
+---- 
 
 # IMPORTANT!
 - ```The default server is one of aternos, if you want to play on another one, you must configure the port in the protocol.go file, set it to 25565.```
