@@ -223,6 +223,8 @@ func (hs *HandShake) Writer(w io.ByteWriter) {
 	}
 }
 
+const PORT_UINT16 uint16 = 21468
+
 func (hs *HandShake) packetLen() int {
 	//payloadLen := uint32(len(hs.proto_version.data) + len(hs.server_address) + len(hs.next_state.data) + 3)
 	fmt.Printf("Proto version: %x - Len of proto_version: %d", hs.Proto_version.GetDataArray(), len(hs.Proto_version.GetDataArray()))
@@ -236,7 +238,7 @@ func (hs *HandShake) packetLen() int {
 
 	// Convert PORT to int
 	port_buf := make([]byte, 2)
-	binary.BigEndian.PutUint16(port_buf, 25565)
+	binary.BigEndian.PutUint16(port_buf, PORT_UINT16)
 	fmt.Printf("Port buf: %x - Port size: %d\n", port_buf, len(port_buf))
 
 	hs.Data = make([]byte, 0)
@@ -309,12 +311,12 @@ func (p *Packet) Writer(w io.ByteWriter) {
 
 // Protocol specs
 const (
-	PORT string = "25565"
+	PORT string = "21468"
 )
 
 var (
-	AUXILIARY chan Raw_Packet = make(chan Raw_Packet, 10)
-	PONG      chan int        = make(chan int, 100)
+	AUXILIARY chan Raw_Packet = make(chan Raw_Packet, 0) // 10
+	PONG      chan int        = make(chan int, 0)        // 100
 )
 
 func NewConnecionAndBind(address string, contexto context.Context) *ConnectionHandler {
@@ -333,7 +335,7 @@ func NewConnecionAndBind(address string, contexto context.Context) *ConnectionHa
 		Address:         server,
 		Client:          client,
 		ctx:             contexto,
-		SIGNALER:        make(chan SIGNAL, 100),
+		SIGNALER:        make(chan SIGNAL, 0), //100
 		Previous_packet: Packet{},
 		mu:              sync.Mutex{},
 	}
@@ -393,10 +395,10 @@ func (ch *ConnectionHandler) ReceivePacket() (Raw_Packet, error) {
 
 	//n, err := ch.Client.Read()
 	n, err := io.Copy(raw_data, ch.Client)
-	if err != nil || n == 0 {
+	if err != nil || n == 0 { // Error case or close connection
 		ch.mu.Unlock()
 		if ch.Previous_packet.PacketID == 0x00 {
-			fmt.Println("HAA!")
+			//fmt.Println("HAA!")
 			ch.SIGNALER <- CLOSE_CONNECTION_AND_HANDSHAKE
 
 		} else {
@@ -486,7 +488,7 @@ func (ch *ConnectionHandler) Auto_handler_internals() {
 			fmt.Println("Connection is running")
 		}
 
-		signal = 0
+		signal = 0x1993
 	}
 }
 
@@ -532,28 +534,6 @@ func HeredatePing(c net.Conn) {
 /*
 	NO PREMIUM LOGIN START
 */
-
-type NPREMIUMLG struct {
-	Username string
-	Pwd      string
-	Data     []byte
-}
-
-func (np *NPREMIUMLG) Writer(w io.ByteWriter) {
-	for i := 0; i < len(np.Data); i++ {
-		w.WriteByte(np.Data[i])
-	}
-}
-
-func (np *NPREMIUMLG) packetLen() int {
-	np.Data = make([]byte, 0)
-	user_buf := EncodeString(np.Username)
-	pwd_buf := EncodeString(np.Pwd)
-
-	np.Data = append(np.Data, user_buf...)
-	np.Data = append(np.Data, pwd_buf...)
-	return len(np.Data)
-}
 
 // END LOGIN
 
@@ -622,12 +602,21 @@ func EncodeUUID(UUID string) (uint64, uint64) {
 // END LOGIN
 
 // Manejar los paquetes que llegan
+/*type TYPE uint8
+
+var (
+	STATUS TYPE = 200
+	JOIN   TYPE = 201
+	PLAY   TYPE = 202
+)*/
+
 type Handler func(uint8, int64, []byte)
 type RecPacketFormat struct {
 	PacketLength  int64
 	PacketID      uint8
 	Data          []byte
 	total_payload []byte
+	//packet_type   TYPE
 }
 
 func (rpf *RecPacketFormat) HandlePacket(h Handler) {
@@ -643,8 +632,10 @@ func (rpf *RecPacketFormat) HandlePacket(h Handler) {
 	var get_n_bytes uint8 = 1
 	get_tpayload_len := len(rpf.total_payload)
 
-	if get_tpayload_len > 127 {
+	if get_tpayload_len > 127 && get_tpayload_len < 16384 {
 		get_n_bytes = 2
+	} else if get_tpayload_len > 16383 {
+		get_n_bytes = 3
 	}
 
 	//packet_lenght := rpf.total_payload[get_n_bytes]
@@ -677,6 +668,11 @@ func Undo(data []byte) (int, error) {
 	var currentByte byte
 
 	for {
+		fmt.Printf("Data: %x, %d", data, len(data)-1)
+		if len(data)-1 < counter {
+			fmt.Println("Se rompio con el counter en: ", counter)
+			break
+		}
 		currentByte = data[counter]
 		value |= (int(currentByte) & segment_bits) << position
 
@@ -684,12 +680,12 @@ func Undo(data []byte) (int, error) {
 			break
 		}
 
-		position += 7
-		counter += 1
-
 		if position >= 32 {
 			log.Fatal("VarInt es mas grande que 32bits")
 		}
+
+		position += 7
+		counter += 1
 	}
 	return value, nil
 }

@@ -11,6 +11,7 @@ Besides that, I plan to build a bot that can connect to different servers and ca
 - Improve efficiency when writing bytes to buffers.
 
 - Fix the Reconnect and resend packet responde log (NOT IS A PROBLEM, IS A LOG)
+
 ------
 
 
@@ -25,3 +26,8 @@ p.HandlePacket(func(pid uint8, packetLength int64, data []byte) {
     /// Handle Packet...
 }
 ```
+
+# IMPORTANT!
+- ```The default server is one of aternos, if you want to play on another one, you must configure the port in the protocol.go file, set it to 25565.```
+  
+- ```The bot is only available for connection, I'm still working on the interaction through commands and improving some features that make the protocol a little inefficient.```
